@@ -1,0 +1,37 @@
+# Task content reference files (copy-paste into notebook; not part of deliverable)
+notebooks/task3_content_to_add.md
+notebooks/task4_content_to_add.md
+notebooks/task5_content_to_add.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (optional; uncomment if you don't want to commit raw/processed data)
+# data/raw/
+# data/processed/
+
+# Misc
+*.log
+.env
+.env.local
