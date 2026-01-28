@@ -31,8 +31,15 @@ tsla_series = tsla_prices.squeeze() if isinstance(tsla_prices, pd.DataFrame) els
 tsla_series = tsla_series.dropna()
 tsla_series.name = "TSLA"
 
-bnd = yf.download("BND", start=start, end=end, auto_adjust=True, progress=False)["Close"].rename("BND")
-spy = yf.download("SPY", start=start, end=end, auto_adjust=True, progress=False)["Close"].rename("SPY")
+_bnd = yf.download("BND", start=start, end=end, auto_adjust=True, progress=False)["Close"]
+bnd = _bnd.squeeze() if isinstance(_bnd, pd.DataFrame) else _bnd
+bnd = bnd.dropna()
+bnd.name = "BND"
+
+_spy = yf.download("SPY", start=start, end=end, auto_adjust=True, progress=False)["Close"]
+spy = _spy.squeeze() if isinstance(_spy, pd.DataFrame) else _spy
+spy = spy.dropna()
+spy.name = "SPY"
 
 prices = pd.concat([tsla_series, bnd, spy], axis=1).dropna()
 returns_daily = prices.pct_change().dropna()
@@ -48,12 +55,22 @@ print("Sample returns:\n", returns_daily.tail())
 
 ```python
 # Expected returns: TSLA from forecast, BND/SPY from history (annualized)
+# Ensure scalars (PyPortfolioOpt expects plain floats; avoid nested Series)
+def _to_float(x):
+    if hasattr(x, "item"):
+        return float(x.item())
+    if hasattr(x, "__len__") and len(x) == 1:
+        return float(x.iloc[0]) if hasattr(x, "iloc") else float(x[0])
+    return float(x)
+
 # TSLA: implied 1‑year return from ARIMA forecast
-tsla_ann_return = (future_mean.iloc[-1] / full_data.iloc[-1]) - 1.0
+p_end = _to_float(full_data.iloc[-1])
+p_forecast = _to_float(future_mean.iloc[-1])
+tsla_ann_return = (p_forecast / p_end) - 1.0
 
 # BND, SPY: mean daily return * 252
-bnd_ann_return = returns_daily["BND"].mean() * 252
-spy_ann_return = returns_daily["SPY"].mean() * 252
+bnd_ann_return = _to_float(returns_daily["BND"].mean() * 252)
+spy_ann_return = _to_float(returns_daily["SPY"].mean() * 252)
 
 expected_returns = pd.Series({
     "TSLA": tsla_ann_return,
@@ -66,6 +83,14 @@ cov_matrix = returns_daily.cov() * 252
 
 print("Expected annual returns:\n", expected_returns.round(4))
 print("\nCovariance matrix (annualized):\n", cov_matrix.round(6))
+
+# Validate inputs for optimization
+print("\nInput validation:")
+print(f"Expected returns has NaN: {expected_returns.isna().any()}")
+print(f"Expected returns has Inf: {np.isinf(expected_returns).any()}")
+print(f"Covariance matrix has NaN: {cov_matrix.isna().any().any()}")
+print(f"Covariance matrix has Inf: {np.isinf(cov_matrix).any().any()}")
+print(f"Covariance matrix is positive semidefinite: {np.all(np.linalg.eigvals(cov_matrix) >= -1e-8)}")
 ```
 
 ---
@@ -85,10 +110,24 @@ fig, ax = plt.subplots(figsize=(10, 6))
 plotting.plot_efficient_frontier(ef, ax=ax, show_assets=True, showfig=False)
 
 # Max Sharpe (tangency) and min vol
-ef_maxsharpe.max_sharpe(risk_free_rate=0.02)
-ret_sharpe, vol_sharpe, sharpe_sharpe = ef_maxsharpe.portfolio_performance(risk_free_rate=0.02)
-ef_minvol.min_volatility()
-ret_minvol, vol_minvol, sharpe_minvol = ef_minvol.portfolio_performance(risk_free_rate=0.02)
+try:
+    weights_sharpe = ef_maxsharpe.max_sharpe(risk_free_rate=0.02)
+    ret_sharpe, vol_sharpe, sharpe_sharpe = ef_maxsharpe.portfolio_performance(risk_free_rate=0.02)
+    print("Max Sharpe optimization successful")
+except Exception as e:
+    print(f"Max Sharpe optimization failed: {e}")
+    print("Trying with different risk-free rate or constraints...")
+    # Fallback: try with default risk-free rate
+    weights_sharpe = ef_maxsharpe.max_sharpe(risk_free_rate=0.0)
+    ret_sharpe, vol_sharpe, sharpe_sharpe = ef_maxsharpe.portfolio_performance(risk_free_rate=0.02)
+
+try:
+    weights_minvol = ef_minvol.min_volatility()
+    ret_minvol, vol_minvol, sharpe_minvol = ef_minvol.portfolio_performance(risk_free_rate=0.02)
+    print("Min volatility optimization successful")
+except Exception as e:
+    print(f"Min volatility optimization failed: {e}")
+    raise
 
 ax.scatter(vol_sharpe, ret_sharpe, marker="*", s=400, c="red", edgecolors="black", label="Max Sharpe (Tangency)", zorder=5)
 ax.scatter(vol_minvol, ret_minvol, marker="s", s=200, c="blue", edgecolors="black", label="Min Volatility", zorder=5)
@@ -119,7 +158,18 @@ plt.show()
 
 ```python
 # Recommended portfolio: Max Sharpe (tangency)
-weights_rec = ef_maxsharpe.clean_weights()
+# Use weights from max_sharpe() if available, otherwise try clean_weights()
+if hasattr(ef_maxsharpe, 'weights') and ef_maxsharpe.weights is not None:
+    weights_rec = ef_maxsharpe.clean_weights()
+else:
+    # Fallback: use weights returned from max_sharpe() if stored
+    if 'weights_sharpe' in locals():
+        weights_rec = weights_sharpe
+    else:
+        # Re-run optimization if needed
+        weights_rec = ef_maxsharpe.max_sharpe(risk_free_rate=0.02)
+        weights_rec = ef_maxsharpe.clean_weights()
+
 ret_rec, vol_rec, sharpe_rec = ef_maxsharpe.portfolio_performance(risk_free_rate=0.02)
 
 print("Recommended portfolio (Max Sharpe / Tangency)")
